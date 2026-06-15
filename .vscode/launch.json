@@ -1,0 +1,22 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"type": "java",
+			"name": "Java node (Spring Boot)",
+			"request": "launch",
+			"mainClass": "integration.demo.IntegrationDemoApplication",
+			"projectName": "moleculer-integration-demo",
+			"cwd": "${workspaceFolder}/java",
+			"console": "integratedTerminal"
+		},
+		{
+			"type": "node",
+			"name": "Node verifier (Node -> Java)",
+			"request": "launch",
+			"program": "${workspaceFolder}/node/verify/node-to-java.js",
+			"cwd": "${workspaceFolder}/node",
+			"console": "integratedTerminal"
+		}
+	]
+}

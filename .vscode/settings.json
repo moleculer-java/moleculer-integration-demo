@@ -1,0 +1,19 @@
+{
+	"files.encoding": "utf8",
+	"files.eol": "\n",
+
+	// The Java side lives in the java/ sub-folder.
+	"java.configuration.updateBuildConfiguration": "automatic",
+	"java.compile.nullAnalysis.mode": "automatic",
+	"maven.pomfile.globPattern": "java/pom.xml",
+
+	// Keep build output and dependencies out of the file explorer / search.
+	"files.exclude": {
+		"**/target": true,
+		"**/node_modules": true
+	},
+	"search.exclude": {
+		"**/target": true,
+		"**/node_modules": true
+	}
+}

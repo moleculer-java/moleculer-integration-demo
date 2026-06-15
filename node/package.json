@@ -1,0 +1,18 @@
+{
+	"name": "moleculer-integration-demo-node",
+	"version": "2.0.0",
+	"private": true,
+	"description": "Node.js side of the Moleculer integration demo: a Moleculer 0.15 node that interoperates with moleculer-java over NATS.",
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"start": "node ./verify/node-to-java.js",
+		"verify": "node ./verify/node-to-java.js",
+		"serve": "node ./start.js"
+	},
+	"dependencies": {
+		"moleculer": "^0.15.0",
+		"nats": "^2"
+	}
+}

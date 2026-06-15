@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+	<modelVersion>4.0.0</modelVersion>
+
+	<!-- ============================================================== -->
+	<!--  Moleculer Integration Demo  -  Java side                      -->
+	<!--                                                                 -->
+	<!--  A Spring Boot application that hosts moleculer-java services   -->
+	<!--  and joins one Moleculer cluster (over NATS) together with a    -->
+	<!--  Node.js Moleculer node, then verifies cross-language calls.    -->
+	<!-- ============================================================== -->
+
+	<!-- Spring Boot parent: brings the dependency BOM, the              -->
+	<!-- spring-boot-maven-plugin, sensible plugin defaults and Logback. -->
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>3.5.3</version>
+		<relativePath/>
+	</parent>
+
+	<groupId>integration.demo</groupId>
+	<artifactId>moleculer-integration-demo</artifactId>
+	<version>2.0.0-SNAPSHOT</version>
+	<packaging>jar</packaging>
+
+	<name>Moleculer Integration Demo (Java side)</name>
+	<description>Spring Boot + moleculer-java node that interoperates with a Node.js Moleculer node over NATS.</description>
+
+	<properties>
+		<java.version>21</java.version>
+		<maven.compiler.release>21</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+		<!-- The whole workspace moves in lockstep to 2.0.0(-SNAPSHOT). -->
+		<moleculer.version>2.0.0-SNAPSHOT</moleculer.version>
+
+		<!-- The NATS transporter is an OPTIONAL dependency inside        -->
+		<!-- moleculer-java, so the jnats client is NOT pulled in          -->
+		<!-- transitively - we must declare it explicitly (see below).     -->
+		<jnats.version>2.21.1</jnats.version>
+	</properties>
+
+	<dependencies>
+
+		<!-- ============ Spring Boot (no web server needed) ============ -->
+		<!-- This is a Moleculer node, not an HTTP app, so we use the      -->
+		<!-- plain starter (Logback + core), NOT spring-boot-starter-web.  -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter</artifactId>
+		</dependency>
+
+		<!-- ===================== moleculer-java ======================= -->
+		<!-- The framework core (broker, services, transporters, JSON      -->
+		<!-- serializer). It transitively brings the datatree stack.       -->
+		<!--                                                               -->
+		<!-- We exclude moleculer-java's own SLF4J wiring so that the      -->
+		<!-- single, clean Spring Boot Logback backend is used instead.    -->
+		<!-- Leaving slf4j-jdk14 in place together with Spring Boot's      -->
+		<!-- jul-to-slf4j bridge would create a JUL<->SLF4J logging loop.  -->
+		<dependency>
+			<groupId>com.github.berkesa</groupId>
+			<artifactId>moleculer-java</artifactId>
+			<version>${moleculer.version}</version>
+			<exclusions>
+				<exclusion>
+					<groupId>org.slf4j</groupId>
+					<artifactId>slf4j-jdk14</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>org.slf4j</groupId>
+					<artifactId>log4j-over-slf4j</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>org.slf4j</groupId>
+					<artifactId>jcl-over-slf4j</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- ===================== NATS transporter ===================== -->
+		<!-- REQUIRED and declared explicitly: the NATS dependency is      -->
+		<!-- <optional> inside moleculer-java, so it is not transitive.    -->
+		<dependency>
+			<groupId>io.nats</groupId>
+			<artifactId>jnats</artifactId>
+			<version>${jnats.version}</version>
+		</dependency>
+
+		<!-- ===================== Tests (optional IT) ================== -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+	</dependencies>
+
+	<build>
+		<finalName>moleculer-integration-demo</finalName>
+		<plugins>
+			<!-- Builds a runnable Spring Boot app and powers spring-boot:run. -->
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<mainClass>integration.demo.IntegrationDemoApplication</mainClass>
+				</configuration>
+			</plugin>
+
+			<!--
+			  Runs the integration test (JavaToNodeIT) during the 'verify' phase
+			  only, so plain 'mvn clean package' never needs a running cluster.
+			  The IT self-skips (via JUnit assumptions) when NATS or the Node.js
+			  side is not available, so 'mvn clean verify' also stays green
+			  without the cluster up.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-failsafe-plugin</artifactId>
+				<executions>
+					<execution>
+						<goals>
+							<goal>integration-test</goal>
+							<goal>verify</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>
