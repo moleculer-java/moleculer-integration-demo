@@ -13,6 +13,28 @@
  *
  * Mirror of the Java service `DataJavaService` (service name "dataJava").
  */
+const crypto = require("crypto");
+const { Readable } = require("stream");
+
+/**
+ * Wraps a Buffer in a binary (non-object-mode) Readable that emits it in
+ * `chunkSize` slices — used by `produceStream` to stream a response back.
+ */
+function bufferToStream(buf, chunkSize = 16 * 1024) {
+	let pos = 0;
+	return new Readable({
+		read() {
+			if (pos >= buf.length) {
+				this.push(null);
+				return;
+			}
+			const end = Math.min(pos + chunkSize, buf.length);
+			this.push(buf.subarray(pos, end));
+			pos = end;
+		}
+	});
+}
+
 module.exports = {
 	name: "dataNode",
 
@@ -151,6 +173,71 @@ module.exports = {
 					}
 				]
 			};
+		},
+
+		// ===============================================================
+		//  Scenario 13 — Metadata visibility across the language boundary
+		// ===============================================================
+
+		/**
+		 * dataNode.echoMeta — proves the two frameworks SEE each other's metadata.
+		 * In Moleculer JS the metadata is `ctx.meta`; in moleculer-java it is
+		 * `ctx.params.getMeta()`. On the wire both map to the request's top-level
+		 * `meta` field, so they are interchangeable.
+		 *
+		 * Returns, as ordinary response data, an exact copy of the meta it received
+		 * (so the caller can assert the remote saw what it sent), and adds a `seenBy`
+		 * marker to the meta — which Moleculer merges back into the caller's context,
+		 * letting the caller also assert the meta round-tripped back.
+		 */
+		echoMeta(ctx) {
+			const received = Object.assign({}, ctx.meta); // snapshot before we touch it
+			ctx.meta.seenBy = "node";                      // merged back to the caller
+			return { receivedMeta: received };
+		},
+
+		// ===============================================================
+		//  Scenario 14 — Streaming: binary transfer across the boundary
+		// ===============================================================
+
+		/**
+		 * dataNode.receiveStream — RECEIVES a binary stream and reports how many
+		 * bytes arrived and their SHA-256, so the caller can prove the exact bytes
+		 * crossed intact. Resolves only once the stream has fully ended.
+		 *
+		 * Note: a streamed request opens with empty params; side-data must travel in
+		 * `meta`, never in `params`.
+		 */
+		receiveStream(ctx) {
+			if (!ctx.stream) {
+				// Not invoked with a stream — return an empty digest.
+				return { bytes: 0, sha256: crypto.createHash("sha256").digest("hex") };
+			}
+			return new Promise((resolve, reject) => {
+				const hash = crypto.createHash("sha256");
+				let bytes = 0;
+				ctx.stream.on("data", chunk => {
+					bytes += chunk.length;
+					hash.update(chunk);
+				});
+				ctx.stream.on("end", () => resolve({ bytes, sha256: hash.digest("hex") }));
+				ctx.stream.on("error", err => reject(err));
+			});
+		},
+
+		/**
+		 * dataNode.produceStream — RETURNS a binary stream of `size` bytes (default
+		 * 64 KB) of deterministic content (`byte[i] === i & 0xFF`), so a remote caller
+		 * can download and verify it. Returning a Readable makes Moleculer stream the
+		 * response back chunk-by-chunk. By-value mirror of the Java produceStream.
+		 */
+		produceStream(ctx) {
+			const size = Number(ctx.params && ctx.params.size != null ? ctx.params.size : 64 * 1024);
+			const buf = Buffer.allocUnsafe(size);
+			for (let i = 0; i < size; i++) {
+				buf[i] = i & 0xFF;
+			}
+			return bufferToStream(buf);
 		}
 	},
 

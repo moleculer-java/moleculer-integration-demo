@@ -22,6 +22,8 @@
  *   10. Event bus: emit and broadcast (dataJava.eventStats)
  *   11. Cacher with TTL (dataJava.getCachedSeq: hit / keying / expiry)
  *   12. Life-like nested structure round-trip (dataJava.getUsers)
+ *   13. Metadata visibility both ways (dataJava.echoMeta)
+ *   14. Binary streaming both ways (dataJava.receiveStream / dataJava.produceStream)
  *
  * Run modes:
  *   - default: after the checks, stay up a short grace period (so the Java side
@@ -29,6 +31,8 @@
  *   - DEMO_STAY_ALIVE=true: keep running after the checks (don't exit).
  */
 const { ServiceBroker } = require("moleculer");
+const crypto = require("crypto");
+const { Readable } = require("stream");
 const config = require("../moleculer.config.js");
 
 // --- The remote (Java) side this harness talks to ---
@@ -72,6 +76,32 @@ function check(name, condition, detailIfFail) {
 
 function sleep(ms) {
 	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** Wraps a Buffer in a binary Readable that emits it in `chunkSize` slices (for the streaming send test). */
+function bufferToStream(buf, chunkSize = 16 * 1024) {
+	let pos = 0;
+	return new Readable({
+		read() {
+			if (pos >= buf.length) {
+				this.push(null);
+				return;
+			}
+			const end = Math.min(pos + chunkSize, buf.length);
+			this.push(buf.subarray(pos, end));
+			pos = end;
+		}
+	});
+}
+
+/** Collects an incoming Readable stream into a single Buffer. */
+function collectStream(stream) {
+	return new Promise((resolve, reject) => {
+		const chunks = [];
+		stream.on("data", chunk => chunks.push(chunk));
+		stream.on("end", () => resolve(Buffer.concat(chunks)));
+		stream.on("error", reject);
+	});
 }
 
 /**
@@ -313,6 +343,72 @@ async function scenarioUsers() {
 		deepEqual(result, buildExpectedUsers()), `got ${JSON.stringify(result)}`);
 }
 
+/**
+ * 13. Metadata: prove the remote node SEES the metadata we send, and that response
+ * metadata is merged back into the caller. In Moleculer JS the metadata is
+ * `ctx.meta`; in moleculer-java it is `ctx.params.getMeta()`. Both serialize to the
+ * request's top-level `meta` field, so they are interchangeable.
+ */
+async function scenarioMeta() {
+	// A structured meta block: scalars plus a nested array and a nested object.
+	const sentMeta = { tenant: "acme", trace: "trace-001", n: 7, tags: ["a", "b"], ctx: { k: "v" } };
+	// The object we pass as opts.meta is the SAME one Moleculer merges response meta into.
+	const meta = JSON.parse(JSON.stringify(sentMeta));
+
+	const rsp = await broker.call(`${DATA}.echoMeta`, null, { meta });
+
+	// 13a: the remote echoed back, as response data, exactly the meta we sent.
+	check(`13a ${DATA}.echoMeta saw the meta we sent (remote reads our metadata)`,
+		deepEqual(rsp && rsp.receivedMeta, sentMeta), `got ${JSON.stringify(rsp && rsp.receivedMeta)}`);
+
+	// 13b: the remote's response meta (its 'seenBy' marker) merged back into our meta.
+	check("13b response meta merged back to caller (seenBy='java')",
+		meta.seenBy === "java", `got meta=${JSON.stringify(meta)}`);
+}
+
+/**
+ * 14. Streaming: prove binary data crosses the language boundary intact, in both
+ * directions. First a dynamically generated buffer is SENT to the remote
+ * `receiveStream` (which returns the byte count + SHA-256 it saw); then a stream is
+ * DOWNLOADED from the remote `produceStream` and its content verified.
+ *
+ * A streamed request opens with empty params; side-data must travel in `meta`,
+ * never in `params` (a non-empty first packet would be treated as stream content).
+ */
+async function scenarioStreaming() {
+	const streamTimeout = CALL_MS + 8000;
+
+	// --- 14a/b: SEND a dynamically generated binary stream to the remote ---
+	const sendSize = 100000;
+	const sent = crypto.randomBytes(sendSize);
+	const sentHash = crypto.createHash("sha256").update(sent).digest("hex");
+
+	const ack = await broker.call(`${DATA}.receiveStream`, null, {
+		stream: bufferToStream(sent),
+		timeout: streamTimeout
+	});
+	check(`14a ${DATA}.receiveStream received all ${sendSize} bytes`,
+		!!ack && ack.bytes === sendSize, `got ${ack && ack.bytes}`);
+	check(`14b ${DATA}.receiveStream SHA-256 matches (bytes intact end-to-end)`,
+		!!ack && ack.sha256 === sentHash, `expected ${sentHash} but got ${ack && ack.sha256}`);
+
+	// --- 14c/d: DOWNLOAD a binary stream produced by the remote ---
+	const prodSize = 64 * 1024;
+	const stream = await broker.call(`${DATA}.produceStream`, { size: prodSize }, { timeout: streamTimeout });
+	const got = await collectStream(stream);
+	check(`14c ${DATA}.produceStream produced ${prodSize} bytes`,
+		got.length === prodSize, `got ${got.length} bytes`);
+
+	const expected = Buffer.allocUnsafe(prodSize);
+	for (let i = 0; i < prodSize; i++) {
+		expected[i] = i & 0xFF;
+	}
+	const gotHash = crypto.createHash("sha256").update(got).digest("hex");
+	const expHash = crypto.createHash("sha256").update(expected).digest("hex");
+	check(`14d ${DATA}.produceStream content matches the expected pattern (SHA-256)`,
+		gotHash === expHash, "downloaded content did not match the deterministic pattern");
+}
+
 /** Builds the users structure we expect dataJava.getUsers to return (by-value mirror). */
 function buildExpectedUsers() {
 	return {
@@ -413,6 +509,8 @@ async function main() {
 	await run("10 event bus emit/broadcast", scenarioEvents);
 	await run("11 cacher with TTL", scenarioCache);
 	await run("12 complex user structure", scenarioUsers);
+	await run("13 metadata visibility", scenarioMeta);
+	await run("14 binary streaming", scenarioStreaming);
 
 	console.log("-----------------------------------------------------------");
 	console.log(`Node -> Java result: ${passed} passed, ${failed} failed`);

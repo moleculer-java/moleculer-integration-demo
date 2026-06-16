@@ -1,5 +1,10 @@
 package integration.demo.verify;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.security.MessageDigest;
+import java.util.HexFormat;
+import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -9,9 +14,11 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import io.datatree.Promise;
 import io.datatree.Tree;
 import services.moleculer.ServiceBroker;
 import services.moleculer.context.CallOptions;
+import services.moleculer.stream.PacketStream;
 
 /**
  * The automated <b>Java &rarr; Node</b> verification harness.
@@ -35,6 +42,8 @@ import services.moleculer.context.CallOptions;
  *   <li>Event bus: {@code emit} and {@code broadcast} ({@code dataNode.eventStats})</li>
  *   <li>Cacher with TTL ({@code dataNode.getCachedSeq}: hit / keying / expiry)</li>
  *   <li>Life-like nested structure round-trip ({@code dataNode.getUsers})</li>
+ *   <li>Metadata visibility both ways ({@code dataNode.echoMeta})</li>
+ *   <li>Binary streaming both ways ({@code dataNode.receiveStream} / {@code dataNode.produceStream})</li>
  * </ol>
  *
  * <h2>Run modes</h2>
@@ -62,6 +71,9 @@ public class JavaToNodeVerifier {
 
 	private final ServiceBroker broker;
 	private final ConfigurableApplicationContext appContext;
+
+	/** Source of the dynamically generated binary payload used by scenario 14. */
+	private final Random rnd = new Random();
 
 	@Value("${demo.auto-verify:true}")
 	private boolean autoVerify;
@@ -134,6 +146,8 @@ public class JavaToNodeVerifier {
 		run(cr, "10 event bus emit/broadcast", () -> scenarioEvents(cr, t));
 		run(cr, "11 cacher with TTL", () -> scenarioCache(cr, t));
 		run(cr, "12 complex user structure", () -> scenarioUsers(cr, t));
+		run(cr, "13 metadata visibility", () -> scenarioMeta(cr, t));
+		run(cr, "14 binary streaming", () -> scenarioStreaming(cr, t));
 
 		return cr;
 	}
@@ -388,9 +402,116 @@ public class JavaToNodeVerifier {
 				"got " + result.toString(false));
 	}
 
+	/**
+	 * 13. Metadata: prove the remote node <b>sees the metadata we send</b>, and
+	 * that response metadata is <b>merged back</b> into the caller.
+	 * <p>
+	 * In {@code moleculer-java} the metadata travels alongside the params and is
+	 * read with {@code ctx.params.getMeta()}; in Moleculer JS it is {@code ctx.meta}.
+	 * Both serialize to the request's top-level {@code meta} field, so they are
+	 * interchangeable across the language boundary.
+	 */
+	private void scenarioMeta(CheckRunner cr, long t) throws Exception {
+		// A structured meta block: scalars plus a nested list and a nested map.
+		Tree sentMeta = new Tree();
+		sentMeta.put("tenant", "acme");
+		sentMeta.put("trace", "trace-001");
+		sentMeta.put("n", 7);
+		sentMeta.putList("tags").add("a").add("b");
+		sentMeta.putMap("ctx").put("k", "v");
+
+		// Attach it as the call's meta (the params themselves stay empty here).
+		Tree params = new Tree();
+		params.getMeta().copyFrom(sentMeta);
+
+		Tree rsp = broker.call(DATA + ".echoMeta", params).waitFor(t);
+
+		// 13a: the remote echoed back, as response data, exactly the meta we sent.
+		Tree received = rsp.get("receivedMeta");
+		cr.check("13a " + DATA + ".echoMeta saw the meta we sent (remote reads our metadata)",
+				cr.deepEquals(sentMeta, received),
+				"sent " + sentMeta.toString(false) + " but got " + (received == null ? "<null>" : received.toString(false)));
+
+		// 13b: the remote's response meta (its 'seenBy' marker) merged back to us.
+		Tree rspMeta = rsp.getMeta();
+		String seenBy = rspMeta == null ? "" : rspMeta.get("seenBy", "");
+		cr.check("13b response meta merged back to caller (seenBy='node')",
+				"node".equals(seenBy),
+				"got meta=" + (rspMeta == null ? "<null>" : rspMeta.toString(false)));
+	}
+
+	/**
+	 * 14. Streaming: prove <b>binary data crosses the language boundary intact</b>,
+	 * in both directions. First a dynamically generated buffer is <i>sent</i> to the
+	 * remote {@code receiveStream} (which returns the byte count + SHA-256 it saw);
+	 * then a stream is <i>downloaded</i> from the remote {@code produceStream} and
+	 * its content verified.
+	 * <p>
+	 * A streamed request opens with empty {@code params}; any side-data must travel
+	 * in {@code meta}, never in {@code params} (a non-empty first packet would be
+	 * treated as stream content by the receiver).
+	 */
+	private void scenarioStreaming(CheckRunner cr, long t) throws Exception {
+		long streamTimeout = t + 8000;
+
+		// --- 14a/b: SEND a dynamically generated binary stream to the remote ---
+		int sendSize = 100_000;
+		byte[] sent = randomBytes(sendSize);
+		String sentHash = sha256Hex(sent);
+
+		PacketStream out = broker.createStream();
+		Promise ackPromise = broker.call(DATA + ".receiveStream", out); // stream only, no params
+		out.transferFrom(new ByteArrayInputStream(sent));               // chunked send, auto-closes
+		Tree ack = ackPromise.waitFor(streamTimeout);
+
+		cr.check("14a " + DATA + ".receiveStream received all " + sendSize + " bytes",
+				ack.get("bytes", -1L) == sendSize, "got " + ack.get("bytes", -1L));
+		cr.check("14b " + DATA + ".receiveStream SHA-256 matches (bytes intact end-to-end)",
+				sentHash.equals(ack.get("sha256", "")),
+				"expected " + sentHash + " but got " + ack.get("sha256", ""));
+
+		// --- 14c/d: DOWNLOAD a binary stream produced by the remote ---
+		int prodSize = 64 * 1024;
+		Tree prodParams = new Tree();
+		prodParams.put("size", prodSize);
+		Tree rsp = broker.call(DATA + ".produceStream", prodParams).waitFor(t);
+
+		PacketStream in = (PacketStream) rsp.asObject();
+		ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+		in.transferTo(buffer).waitFor(streamTimeout);
+		byte[] got = buffer.toByteArray();
+
+		cr.check("14c " + DATA + ".produceStream produced " + prodSize + " bytes",
+				got.length == prodSize, "got " + got.length + " bytes");
+		cr.check("14d " + DATA + ".produceStream content matches the expected pattern (SHA-256)",
+				sha256Hex(got).equals(sha256Hex(deterministicBytes(prodSize))),
+				"downloaded content did not match the deterministic pattern");
+	}
+
 	// ===================================================================
 	//  Helpers
 	// ===================================================================
+
+	/** Random binary payload for the streaming send test (dynamically generated). */
+	private byte[] randomBytes(int size) {
+		byte[] b = new byte[size];
+		rnd.nextBytes(b);
+		return b;
+	}
+
+	/** Deterministic content ({@code byte[i] == i & 0xFF}); mirrors the Node.js {@code produceStream}. */
+	private static byte[] deterministicBytes(int size) {
+		byte[] b = new byte[size];
+		for (int i = 0; i < size; i++) {
+			b[i] = (byte) (i & 0xFF);
+		}
+		return b;
+	}
+
+	/** Lower-case hex SHA-256 of the given bytes (matches Node's {@code createHash('sha256').digest('hex')}). */
+	private static String sha256Hex(byte[] data) throws Exception {
+		return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(data));
+	}
 
 	/** Builds a rich, nested, JSON-safe object for the deep-echo test. */
 	private static Tree buildRichPayload() {

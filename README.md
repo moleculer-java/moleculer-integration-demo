@@ -29,7 +29,7 @@ if they were local.
 
 ## What it verifies
 
-Each side runs the **same twelve scenarios** against the *other* language's node:
+Each side runs the **same fourteen scenarios** against the *other* language's node:
 
 | # | Scenario | What it proves |
 |---|----------|----------------|
@@ -45,6 +45,8 @@ Each side runs the **same twelve scenarios** against the *other* language's node
 | 10 | **Event bus: emit + broadcast** (`eventStats`) | Both `emit` (load-balanced) and `broadcast` (all listeners) reach the other language |
 | 11 | **Cacher with TTL** (`getCachedSeq`) | An action cached by key returns a cache **hit**, distinguishes **keys**, and **expires** after its TTL — and a remote caller sees the owner-side cache |
 | 12 | **Complex user structure** (`getUsers`) | A life-like, deeply nested object (user with `address`/`geo`, `emails`/`roles` arrays and a `phones` array of objects) **deep-equals** intact across the boundary |
+| 13 | **Metadata visibility** (`echoMeta`) | Each framework **sees the other's metadata** — a structured `meta` block sent with a call is read on the remote side (`ctx.meta` ⇄ `ctx.params.getMeta()`), echoed back as data, and the remote's response-meta marker is **merged back** into the caller |
+| 14 | **Binary streaming** (`receiveStream` / `produceStream`) | **Binary data crosses intact, both ways** — a dynamically generated ~100 KB buffer is *streamed to* the remote (verified by byte count + SHA-256) and a 64 KB stream is *downloaded from* the remote (content verified by SHA-256) |
 
 The service/call code is written to read cleanly as **copy-pasteable reference samples** for building
 hybrid Java + JavaScript systems joined by Moleculer.
@@ -110,12 +112,18 @@ lines. Expected end state: **every scenario `[PASS]` on both terminals.**
 [PASS] 11c getCachedSeq{id:1} after TTL returns a fresh seq (expiry)
 [PASS] 12a getUsers returns 2 users
 ... (12b–12e) ...
+[PASS] 13a dataJava.echoMeta saw the meta we sent (remote reads our metadata)
+[PASS] 13b response meta merged back to caller (seenBy='java')
+[PASS] 14a dataJava.receiveStream received all 100000 bytes
+[PASS] 14b dataJava.receiveStream SHA-256 matches (bytes intact end-to-end)
+[PASS] 14c dataJava.produceStream produced 65536 bytes
+[PASS] 14d dataJava.produceStream content matches the expected pattern (SHA-256)
 -----------------------------------------------------------
-Node -> Java result: 38 passed, 0 failed
+Node -> Java result: 44 passed, 0 failed
 ===========================================================
 ```
 
-The Java side prints the mirror-image output (`Java -> Node result: 38 passed, 0 failed`).
+The Java side prints the mirror-image output (`Java -> Node result: 44 passed, 0 failed`).
 
 ## Run modes
 
@@ -145,7 +153,9 @@ cluster-less build.
 - **Stick to JSON-safe types** in action params and responses: plain objects/maps, arrays/lists and the
   primitives `number`, `string`, `boolean`, `null`. **Avoid** `Date`, `Map`, `Set`, `BigInt` and
   `Buffer` — the native JSON serializer cannot represent them, so they would not round-trip identically.
-  Large integers stay within JavaScript's safe-integer range (`Number.MAX_SAFE_INTEGER`).
+  Large integers stay within JavaScript's safe-integer range (`Number.MAX_SAFE_INTEGER`). **Binary data
+  is still fully supported** — but through the dedicated **streaming** channel (scenario 14), which
+  chunks bytes over the wire as `{ type: "Buffer", data: [...] }` packets, *not* as JSON `params`.
 - **Unique `nodeID` per process.** The two nodes use `java-node` and `node-node`; colliding ids break
   cluster discovery.
 - **Service names are shared identifiers.** An action is addressed as `<serviceName>.<actionName>` on
@@ -154,7 +164,7 @@ cluster-less build.
 All twelve scenarios — including a real `null`, a large integer, and a deeply nested object — round-trip
 **intact in both directions** with no special handling beyond the protocol-version alignment above.
 
-A few notes on the feature scenarios (9–12):
+A few notes on the feature scenarios (9–14):
 
 - **Ping** uses `broker.ping(...)`; both frameworks return a small timing record (the Java side a
   `Tree` with `time`/`arrived`, the Node side `{ nodeID, elapsedTime, timeDiff }`).
@@ -165,6 +175,16 @@ A few notes on the feature scenarios (9–12):
   benefits from the owner's cache. The cached action returns a counter that only advances on a real
   (uncached) invocation, which makes the hit / per-key / TTL-expiry behaviour observable. The TTL
   sub-check waits ~4 s for the 2 s entry to expire, so each side's run is a few seconds longer.
+- **Metadata is one block, two APIs.** Moleculer's request `meta` is read as `ctx.meta` in JavaScript
+  and as `ctx.params.getMeta()` in Java — the same on-the-wire field. It is *merged* across nested
+  calls and *sent back* with the response, so the caller sees both that the remote read its meta and
+  the remote's additions. Keep meta values JSON-safe, like params.
+- **Streaming carries the bytes, `meta` carries the rest.** A streamed *request* opens with **empty
+  `params`** — put a filename or any side-data in `meta`, because the first packet's `params` would
+  otherwise be consumed as stream content by the receiver. (A *response* stream has no such limit: the
+  call's `params` are normal, and the action returns the stream.) The demo generates its payloads in
+  memory; to stream a real file instead, Java has `PacketStream.transferFrom(new File(...))` /
+  `transferTo(new File(...))` and Node has `fs.createReadStream` / `fs.createWriteStream`.
 
 ## Layout
 

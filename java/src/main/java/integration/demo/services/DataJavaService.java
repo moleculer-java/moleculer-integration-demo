@@ -1,13 +1,19 @@
 package integration.demo.services;
 
+import java.io.ByteArrayInputStream;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
+import io.datatree.Promise;
 import io.datatree.Tree;
 import services.moleculer.cacher.Cache;
 import services.moleculer.eventbus.Listener;
 import services.moleculer.eventbus.Subscribe;
 import services.moleculer.service.Action;
 import services.moleculer.service.Service;
+import services.moleculer.stream.PacketStream;
 
 /**
  * Demo service {@code "dataJava"} &mdash; the structured-data and event side of the
@@ -268,5 +274,114 @@ public class DataJavaService extends Service {
 		lastBroadcast = ctx.params;
 		broadcastCount.incrementAndGet();
 	};
+
+	// ===================================================================
+	//  Scenario 13 — Metadata visibility across the language boundary
+	// ===================================================================
+
+	/**
+	 * {@code dataJava.echoMeta} &mdash; proves the two frameworks <b>see each
+	 * other's metadata</b>. In {@code moleculer-java} the metadata rides alongside
+	 * the params and is read with {@link io.datatree.Tree#getMeta() ctx.params.getMeta()};
+	 * in Moleculer JS it is {@code ctx.meta}. On the wire both map to the request's
+	 * top-level {@code meta} field, so they are interchangeable.
+	 * <p>
+	 * This action returns, as ordinary response <i>data</i>, an exact copy of the
+	 * meta it received (so the caller can assert the remote saw what it sent), and
+	 * it also adds a {@code seenBy} entry to the meta. Moleculer merges response
+	 * meta back into the caller's context, so the caller can additionally assert
+	 * that the meta round-tripped back &mdash; in both directions.
+	 */
+	public Action echoMeta = ctx -> {
+		Tree meta = ctx.params.getMeta();
+
+		// Echo back (as data) exactly what we received, BEFORE we touch the meta.
+		Tree out = new Tree();
+		out.putMap("receivedMeta").copyFrom(meta);
+
+		// Add a marker to the meta; it is merged back into the caller's context.
+		meta.put("seenBy", "java");
+		return out;
+	};
+
+	// ===================================================================
+	//  Scenario 14 — Streaming: binary transfer across the boundary
+	// ===================================================================
+
+	/**
+	 * {@code dataJava.receiveStream} &mdash; <b>receives</b> a binary stream and
+	 * reports how many bytes arrived and their SHA-256, so the caller can prove the
+	 * exact bytes crossed intact. The stream is consumed in an event-driven manner
+	 * ({@code ctx.stream.onPacket(...)}); the action returns a {@link Promise} that
+	 * resolves only once the stream is fully closed.
+	 * <p>
+	 * Note on interop: a streamed request carries its first ("open") packet with
+	 * empty {@code params} &mdash; any side-data must travel in the {@code meta}
+	 * block, never in {@code params}, because the receiving stream would otherwise
+	 * treat the params as stream content.
+	 */
+	public Action receiveStream = ctx -> {
+		if (ctx.stream == null) {
+			// Not invoked with a stream — return an empty digest.
+			return digestResult(0L, emptySha256());
+		}
+		return new Promise(res -> {
+			MessageDigest md = MessageDigest.getInstance("SHA-256");
+			AtomicLong byteCount = new AtomicLong();
+			ctx.stream.onPacket((bytes, cause, close) -> {
+				if (bytes != null) {
+					md.update(bytes);
+					byteCount.addAndGet(bytes.length);
+				}
+				if (cause != null) {
+					res.reject(cause);
+				} else if (close) {
+					res.resolve(digestResult(byteCount.get(), HexFormat.of().formatHex(md.digest())));
+				}
+			});
+		});
+	};
+
+	/**
+	 * {@code dataJava.produceStream} &mdash; <b>returns</b> a binary stream of
+	 * {@code size} bytes (default 64&nbsp;KB) of deterministic content
+	 * ({@code byte[i] == i & 0xFF}), so a remote caller can download it and verify
+	 * the content. Returning a {@link PacketStream} from an action makes the
+	 * framework stream the response back chunk-by-chunk.
+	 */
+	public Action produceStream = ctx -> {
+		int size = ctx.params.get("size", 64 * 1024);
+		byte[] content = deterministicBytes(size);
+
+		PacketStream stream = ctx.createStream();
+		// Push the bytes asynchronously, in packet-sized chunks; transferFrom
+		// closes the stream when the source is exhausted.
+		stream.transferFrom(new ByteArrayInputStream(content));
+		return stream;
+	};
+
+	// --- Streaming/metadata helpers ---
+
+	/** Builds the {@code { bytes, sha256 }} acknowledgement returned by {@link #receiveStream}. */
+	private static Tree digestResult(long bytes, String sha256) {
+		Tree out = new Tree();
+		out.put("bytes", bytes);
+		out.put("sha256", sha256);
+		return out;
+	}
+
+	/** Deterministic content shared (by value) with the Node.js {@code produceStream}. */
+	private static byte[] deterministicBytes(int size) {
+		byte[] content = new byte[size];
+		for (int i = 0; i < size; i++) {
+			content[i] = (byte) (i & 0xFF);
+		}
+		return content;
+	}
+
+	/** SHA-256 hex of an empty byte stream (the {@code ctx.stream == null} fallback). */
+	private static String emptySha256() throws Exception {
+		return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(new byte[0]));
+	}
 
 }

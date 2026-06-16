@@ -35,6 +35,11 @@ directions**, without errors:
 - **Send and receive events** across the language boundary (both `emit` and `broadcast`).
 - **Ping** the other node and read the round-trip timing back (`broker.ping`).
 - **Cache** an action by key with a TTL and observe the owner-side cache from a remote caller.
+- **See each other's metadata** — a structured request `meta` block is read on the remote side
+  (`ctx.meta` in JS ⇄ `ctx.params.getMeta()` in Java) and merged back in the response.
+- **Stream binary data both ways** — send a dynamically generated buffer to a remote action and
+  download a stream from one, verified by byte count + SHA-256 (binary travels on Moleculer's
+  streaming channel, not as JSON params).
 
 The project doubles as a set of **copy-pasteable reference samples** for building hybrid systems where
 one part of the application is written in JavaScript and another part in Java, joined by Moleculer.
@@ -100,6 +105,13 @@ documentation sample. See `TODO.md` for the exact scenarios and the run flow.
   `BigInt`, and `Buffer` — the native JSON serializer cannot represent them, so they would not survive
   the round trip identically. On the Java side this maps to `io.datatree.Tree` values built from the same
   JSON-safe types. Document any deviation as a known limitation.
+- **Binary goes through the streaming channel, not params.** Don't try to put a `Buffer`/`byte[]` in
+  JSON params; use Moleculer **streaming** instead (scenario 14: `receiveStream`/`produceStream`). A
+  streamed *request* must open with **empty `params`** — carry any side-data (e.g. a filename) in
+  `meta`, or the first packet's params are consumed as stream content by the receiver.
+- **Metadata is one wire field, two APIs.** Send/read request metadata via `ctx.meta` (JS) ⇄
+  `ctx.params.getMeta()` (Java); keep meta values JSON-safe. It is merged across nested calls and sent
+  back with the response (scenario 13: `echoMeta`).
 - **Unique `nodeID` per process.** The Java node and the Node.js node must use different node IDs (the
   demo uses `java-node` and `node-node`); colliding IDs break cluster discovery.
 - **Service names are shared identifiers.** An action is addressed as `<serviceName>.<actionName>` on
