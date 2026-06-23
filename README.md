@@ -8,7 +8,7 @@ and interoperate over a shared message bus.
 Two cooperating processes join the same Moleculer cluster:
 
 ```
-        ┌────────────────────────┐         NATS          ┌────────────────────────┐
+        ┌────────────────────────┐         NATS           ┌────────────────────────┐
         │   Java node            │   nats://localhost     │   Node.js node         │
         │   (Spring Boot +       │◄─────────4222─────────►│   (Moleculer 0.15)     │
         │    moleculer-java)     │   JSON serializer      │                        │
