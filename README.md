@@ -53,7 +53,7 @@ hybrid Java + JavaScript systems joined by Moleculer.
 
 ## Prerequisites
 
-- **JDK 21+** and **Maven** (the Java side compiles with `maven.compiler.release=21`).
+- **JDK 17+** and **Maven** (the Java side compiles with `maven.compiler.release=17`).
 - **Node.js ≥ 22** and **npm** (developed against Node v24, npm 11).
 - A **NATS server** reachable at **`nats://localhost:4222`**. The demo *assumes NATS is already
   running* — it does not start it for you. Quick ways to get one:

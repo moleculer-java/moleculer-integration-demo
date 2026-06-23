@@ -24,19 +24,19 @@
 
 	<groupId>integration.demo</groupId>
 	<artifactId>moleculer-integration-demo</artifactId>
-	<version>2.0.0-SNAPSHOT</version>
+	<version>2.0.0</version>
 	<packaging>jar</packaging>
 
 	<name>Moleculer Integration Demo (Java side)</name>
 	<description>Spring Boot + moleculer-java node that interoperates with a Node.js Moleculer node over NATS.</description>
 
 	<properties>
-		<java.version>21</java.version>
-		<maven.compiler.release>21</maven.compiler.release>
+		<java.version>17</java.version>
+		<maven.compiler.release>17</maven.compiler.release>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-		<!-- The whole workspace moves in lockstep to 2.0.0(-SNAPSHOT). -->
-		<moleculer.version>2.0.0-SNAPSHOT</moleculer.version>
+		<!-- The whole workspace moves in lockstep to 2.0.0. -->
+		<moleculer.version>2.0.0</moleculer.version>
 
 		<!-- The NATS transporter is an OPTIONAL dependency inside        -->
 		<!-- moleculer-java, so the jnats client is NOT pulled in          -->

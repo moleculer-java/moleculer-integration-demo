@@ -64,11 +64,11 @@ moleculer-integration-demo/
 
 ## Prerequisites
 
-- **JDK 21** and **Maven** (the Java side targets `maven.compiler.release=21`).
+- **JDK 17+** and **Maven** (the Java side targets `maven.compiler.release=17`; JDK 25 in use).
 - **Node.js >= 22** (developed and tested with **Node v24.11.1**, **npm 11.6.4**).
 - A **NATS server** reachable at `nats://localhost:4222`. The demo **assumes NATS is already running**
   (start it however you prefer); the project only documents the connection URL, it does not start NATS.
-- The **`moleculer-java` 2.0.0-SNAPSHOT** artifact (and the `datatree` stack it depends on) installed in
+- The **`moleculer-java` 2.0.0** artifact (and the `datatree` stack it depends on) installed in
   the local Maven repository (`~/.m2`). The Java side resolves it from there.
 
 ## Build & run
